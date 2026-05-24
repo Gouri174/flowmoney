@@ -1,7 +1,7 @@
 import React from 'react';
 import Svg, { Rect, Text as SvgText } from 'react-native-svg';
 
-interface Bar { label: string; value: number; color?: string; }
+interface Bar { label: string; value: number; color?: string; onPress?: () => void; }
 
 export default function SvgBarChart({ data, width = 320, height = 140, color = '#0F62FE' }: {
   data: Bar[];
@@ -24,11 +24,14 @@ export default function SvgBarChart({ data, width = 320, height = 140, color = '
         const y = padTop + chartH - barH;
         return (
           <React.Fragment key={i}>
-            <Rect x={x} y={y} width={barW} height={barH} rx={4} fill={d.color ?? color} opacity={0.9} />
-            <SvgText
-              x={x + barW / 2} y={height - 5}
-              textAnchor="middle" fontSize={10} fill="#64748B"
-            >
+            {/* Invisible full-height hit area for easy tapping */}
+            <Rect
+              x={x} y={padTop} width={barW} height={chartH}
+              fill="transparent"
+              onPress={d.onPress}
+            />
+            <Rect x={x} y={y} width={barW} height={barH} rx={4} fill={d.color ?? color} opacity={0.9} onPress={d.onPress} />
+            <SvgText x={x + barW / 2} y={height - 5} textAnchor="middle" fontSize={10} fill="#64748B">
               {d.label}
             </SvgText>
           </React.Fragment>

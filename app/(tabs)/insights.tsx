@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, useWindowDimensions, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, useWindowDimensions, TouchableOpacity, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { TrendingUp, TrendingDown, Zap, Calendar, ArrowUpRight, ArrowDownLeft } from 'lucide-react-native';
+import { TrendingUp, TrendingDown, Zap, Calendar, ArrowUpRight, ArrowDownLeft, X, ChevronLeft, ChevronRight } from 'lucide-react-native';
+import type { Transaction } from '@/types/index';
 import { useApp } from '@/context/AppContext';
 import { COLORS, SPACING, RADIUS, FONT, CATEGORY_COLORS } from '@/constants/theme';
 import { formatCurrency, getMonthStart } from '@/utils/format';
@@ -16,6 +17,23 @@ export default function InsightsScreen() {
   const { width } = useWindowDimensions();
   const chartWidth = width - SPACING.md * 2 - 32;
   const [period, setPeriod] = useState<Period>('this');
+  // Stack-based drill: each entry is a view level — push to go deeper, pop to go back
+  const [drillStack, setDrillStack] = useState<Array<{ title: string; txns: Transaction[] }>>([]);
+  const drill = drillStack[drillStack.length - 1] ?? null;
+
+  function openDrill(title: string, txns: Transaction[]) {
+    setDrillStack([{ title, txns }]);
+  }
+  function drillIntoMerchant(merchant: string) {
+    const all = transactions.filter((t) => t.merchant === merchant);
+    setDrillStack((prev) => [...prev, { title: `All "${merchant}"`, txns: all }]);
+  }
+  function drillBack() {
+    setDrillStack((prev) => prev.slice(0, -1));
+  }
+  function closeDrill() {
+    setDrillStack([]);
+  }
 
   const now = new Date();
 
@@ -66,10 +84,15 @@ export default function InsightsScreen() {
       const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
       const start = new Date(d.getFullYear(), d.getMonth(), 1);
       const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
-      const amount = transactions
-        .filter((t) => t.is_debit && new Date(t.date) >= start && new Date(t.date) <= end)
-        .reduce((s, t) => s + t.amount, 0);
-      return { label: d.toLocaleDateString('en-IN', { month: 'short' }), value: amount };
+      const monthTxns = transactions.filter((t) => { const td = new Date(t.date); return td >= start && td <= end; });
+      const amount = monthTxns.filter((t) => t.is_debit).reduce((s, t) => s + t.amount, 0);
+      const label = d.toLocaleDateString('en-IN', { month: 'short' });
+      const title = d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+      return {
+        label,
+        value: amount,
+        onPress: monthTxns.length > 0 ? () => openDrill(title, monthTxns) : undefined,
+      };
     }),
     [transactions]
   );
@@ -82,25 +105,30 @@ export default function InsightsScreen() {
       d.setDate(d.getDate() - (days - 1 - i));
       const s = new Date(d); s.setHours(0, 0, 0, 0);
       const e = new Date(d); e.setHours(23, 59, 59, 999);
-      const amount = debitTxns.filter((t) => {
-        const td = new Date(t.date);
-        return td >= s && td <= e;
-      }).reduce((sum, t) => sum + t.amount, 0);
+      const dayTxns = periodTxns.filter((t) => { const td = new Date(t.date); return td >= s && td <= e; });
+      const amount = dayTxns.filter((t) => t.is_debit).reduce((sum, t) => sum + t.amount, 0);
+      const title = d.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
       return {
         label: d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }).split(' ')[0],
         value: amount,
+        onPress: dayTxns.length > 0 ? () => openDrill(title, dayTxns) : undefined,
       };
     });
-  }, [debitTxns, periodRange]);
+  }, [debitTxns, periodTxns, periodRange]);
 
   // Day of week
   const dowBars = useMemo(() => {
     const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    const map: Record<string, number> = {};
-    days.forEach((d) => { map[d] = 0; });
-    debitTxns.forEach((t) => { const d = days[new Date(t.date).getDay()]; map[d] += t.amount; });
-    return days.map((d) => ({ label: d.slice(0, 3), value: map[d] }));
-  }, [debitTxns]);
+    return days.map((d, idx) => {
+      const dayTxns = periodTxns.filter((t) => new Date(t.date).getDay() === idx);
+      const amount = dayTxns.filter((t) => t.is_debit).reduce((s, t) => s + t.amount, 0);
+      return {
+        label: d,
+        value: amount,
+        onPress: dayTxns.length > 0 ? () => openDrill(`All ${d}s`, dayTxns) : undefined,
+      };
+    });
+  }, [periodTxns]);
 
   // Smart insights
   const prevMonthTxns = useMemo(() => {
@@ -250,6 +278,77 @@ export default function InsightsScreen() {
           </View>
         )}
       </ScrollView>
+
+      {/* Drill-down transaction sheet */}
+      <Modal visible={!!drill} transparent animationType="slide" onRequestClose={closeDrill}>
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={closeDrill} />
+        {drill && (
+          <View style={styles.drillSheet}>
+            <View style={styles.drillHandle} />
+            <View style={styles.drillHeader}>
+              {drillStack.length > 1 && (
+                <TouchableOpacity onPress={drillBack} style={styles.drillBack}>
+                  <ChevronLeft color={COLORS.primary} size={20} />
+                </TouchableOpacity>
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.drillTitle}>{drill.title}</Text>
+                <Text style={styles.drillSub}>
+                  {drill.txns.length} transactions ·{' '}
+                  <Text style={{ color: COLORS.error, fontWeight: '700' }}>
+                    {formatCurrency(drill.txns.filter((t) => t.is_debit).reduce((s, t) => s + t.amount, 0))}
+                  </Text>
+                  {' spent'}
+                  {drill.txns.some((t) => !t.is_debit) && (
+                    <Text style={{ color: COLORS.success }}>
+                      {' · +'}
+                      {formatCurrency(drill.txns.filter((t) => !t.is_debit).reduce((s, t) => s + t.amount, 0))}
+                      {' received'}
+                    </Text>
+                  )}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={closeDrill} style={styles.drillClose}>
+                <X color={COLORS.textMuted} size={18} />
+              </TouchableOpacity>
+            </View>
+            {drillStack.length === 1 && (
+              <Text style={styles.drillHint}>Tap a transaction to see all from that merchant</Text>
+            )}
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {drill.txns
+                .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                .map((t) => (
+                  <TouchableOpacity
+                    key={t.id}
+                    style={styles.drillRow}
+                    onPress={() => drillIntoMerchant(t.merchant)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.drillMerchant} numberOfLines={1}>{t.merchant}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 }}>
+                        <View style={[styles.catDot, { backgroundColor: CATEGORY_COLORS[t.category_name] ?? '#999' }]} />
+                        <Text style={styles.drillCat}>{t.category_name}</Text>
+                        <Text style={styles.drillTime}>
+                          {new Date(t.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                          {' · '}
+                          {new Date(t.date).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                      <Text style={[styles.drillAmt, { color: t.is_debit ? COLORS.error : COLORS.success }]}>
+                        {t.is_debit ? '-' : '+'}{formatCurrency(t.amount)}
+                      </Text>
+                      <ChevronRight color={COLORS.border} size={12} />
+                    </View>
+                  </TouchableOpacity>
+                ))}
+            </ScrollView>
+          </View>
+        )}
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -288,4 +387,19 @@ const styles = StyleSheet.create({
   catAmt: { fontSize: FONT.sizes.xs, fontWeight: '700', color: COLORS.textMuted, width: 34, textAlign: 'right' },
   empty: { padding: SPACING.xxl, alignItems: 'center' },
   emptyText: { fontSize: FONT.sizes.sm, color: COLORS.textMuted, textAlign: 'center' },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' },
+  drillSheet: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: COLORS.card, borderTopLeftRadius: RADIUS.xl, borderTopRightRadius: RADIUS.xl, padding: SPACING.lg, paddingBottom: 40, maxHeight: '80%' },
+  drillHandle: { width: 40, height: 4, backgroundColor: COLORS.border, borderRadius: 2, alignSelf: 'center', marginBottom: SPACING.md },
+  drillHeader: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: SPACING.md },
+  drillTitle: { fontSize: FONT.sizes.lg, fontWeight: '700', color: COLORS.text },
+  drillSub: { fontSize: FONT.sizes.sm, color: COLORS.textMuted, marginTop: 2 },
+  drillClose: { padding: 4 },
+  drillBack: { padding: 4, marginRight: 4 },
+  drillHint: { fontSize: FONT.sizes.xs, color: COLORS.textLight, marginBottom: SPACING.sm, fontStyle: 'italic' },
+  drillRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: SPACING.sm, borderBottomWidth: 1, borderBottomColor: COLORS.border, gap: SPACING.sm },
+  drillMerchant: { fontSize: FONT.sizes.sm, fontWeight: '600', color: COLORS.text },
+  drillCat: { fontSize: FONT.sizes.xs, color: COLORS.textMuted },
+  drillTime: { fontSize: FONT.sizes.xs, color: COLORS.textLight },
+  drillAmt: { fontSize: FONT.sizes.sm, fontWeight: '700' },
+  catDot: { width: 8, height: 8, borderRadius: 4 },
 });

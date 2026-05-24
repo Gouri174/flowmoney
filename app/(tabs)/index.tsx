@@ -1,9 +1,9 @@
 import React, { useMemo } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { RefreshCw, Bell, TrendingDown, Wallet, TriangleAlert as AlertTriangle } from 'lucide-react-native';
+import { Bell, TrendingDown, Wallet, TriangleAlert as AlertTriangle } from 'lucide-react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
@@ -14,7 +14,7 @@ import CategoryBadge from '@/components/CategoryBadge';
 
 export default function DashboardScreen() {
   const { profile } = useAuth();
-  const { transactions, budgets, syncing, syncTransactions, unreadCount } = useApp();
+  const { transactions, budgets, unreadCount } = useApp();
 
   const now = new Date();
   const month = now.getMonth() + 1;
@@ -87,14 +87,6 @@ export default function DashboardScreen() {
                   <Text style={styles.badgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
                 </View>
               )}
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.iconBtn, syncing && { borderColor: COLORS.primary }]}
-              onPress={syncTransactions} disabled={syncing}
-            >
-              {syncing
-                ? <ActivityIndicator size={18} color={COLORS.primary} />
-                : <RefreshCw color={COLORS.text} size={18} />}
             </TouchableOpacity>
           </View>
         </View>

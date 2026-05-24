@@ -1,7 +1,7 @@
 import React from 'react';
 import Svg, { Path, Circle, Text as SvgText, Defs, LinearGradient, Stop } from 'react-native-svg';
 
-interface Point { label: string; value: number; }
+interface Point { label: string; value: number; onPress?: () => void; }
 
 export default function SvgLineChart({ data, width = 320, height = 140, color = '#0F62FE' }: {
   data: Point[];
@@ -40,7 +40,8 @@ export default function SvgLineChart({ data, width = 320, height = 140, color = 
       <Path d={linePath} stroke={color} strokeWidth={2.5} fill="none" strokeLinejoin="round" />
       {pts.map((p, i) => (
         <React.Fragment key={i}>
-          <Circle cx={p.x} cy={p.y} r={4} fill={color} />
+          <Circle cx={p.x} cy={p.y} r={14} fill="transparent" onPress={data[i].onPress} />
+          <Circle cx={p.x} cy={p.y} r={4} fill={color} onPress={data[i].onPress} />
           <Circle cx={p.x} cy={p.y} r={2.5} fill="#fff" />
           <SvgText x={p.x} y={height - 5} textAnchor="middle" fontSize={10} fill="#64748B">
             {p.label}
