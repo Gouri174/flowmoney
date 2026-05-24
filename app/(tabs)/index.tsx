@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, useWindowDimensions, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Bell, TrendingDown, Wallet, TriangleAlert as AlertTriangle, X } from 'lucide-react-native';
+import { Bell, TrendingDown, TrendingUp, Wallet, TriangleAlert as AlertTriangle, X, Repeat2, Target } from 'lucide-react-native';
 import type { Transaction } from '@/types/index';
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
@@ -81,6 +81,50 @@ export default function DashboardScreen() {
 
   const recentTxns = transactions.slice(0, 5);
 
+  // ── Projected spend this month ──────────────────────────────────────────────
+  const projection = useMemo(() => {
+    const dayOfMonth = now.getDate();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    if (dayOfMonth === 0 || monthSpend === 0) return null;
+    const dailyAvg = monthSpend / dayOfMonth;
+    const projected = Math.round(dailyAvg * daysInMonth);
+    const isOver = totalBudget > 0 && projected > totalBudget;
+    const pct = totalBudget > 0 ? Math.round((projected / totalBudget) * 100) : null;
+    return { projected, isOver, dailyAvg, daysLeft: daysInMonth - dayOfMonth, pct };
+  }, [monthSpend, totalBudget]);
+
+  // Daily budget limit → reference line on bar chart
+  const dailyBudgetLimit = useMemo(() => {
+    if (totalBudget <= 0) return undefined;
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    return totalBudget / daysInMonth;
+  }, [totalBudget]);
+
+  // ── Top 3 recurring merchants ────────────────────────────────────────────────
+  const recurringMerchants = useMemo(() => {
+    const merchantMonths: Record<string, Set<string>> = {};
+    const merchantTotal: Record<string, number> = {};
+    const merchantCount: Record<string, number> = {};
+    transactions.filter((t) => t.is_debit).forEach((t) => {
+      const d = new Date(t.date);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      if (!merchantMonths[t.merchant]) merchantMonths[t.merchant] = new Set();
+      merchantMonths[t.merchant].add(key);
+      merchantTotal[t.merchant] = (merchantTotal[t.merchant] ?? 0) + t.amount;
+      merchantCount[t.merchant] = (merchantCount[t.merchant] ?? 0) + 1;
+    });
+    return Object.entries(merchantMonths)
+      .filter(([, months]) => months.size >= 2)
+      .map(([merchant, months]) => ({
+        merchant,
+        monthCount: months.size,
+        avgAmount: merchantTotal[merchant] / merchantCount[merchant],
+        totalAmount: merchantTotal[merchant],
+      }))
+      .sort((a, b) => b.monthCount - a.monthCount)
+      .slice(0, 3);
+  }, [transactions]);
+
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
@@ -145,11 +189,36 @@ export default function DashboardScreen() {
           </View>
         )}
 
-        {/* 7-day bar chart */}
+        {/* Projection card */}
+        {projection && (
+          <View style={[styles.projectionCard, { borderLeftColor: projection.isOver ? COLORS.error : COLORS.success }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.projectionLabel}>
+                {projection.isOver ? '⚠️ Projected to overspend' : '✅ On track this month'}
+              </Text>
+              <Text style={[styles.projectionAmount, { color: projection.isOver ? COLORS.error : COLORS.success }]}>
+                {formatCurrency(projection.projected)} projected
+              </Text>
+              <Text style={styles.projectionSub}>
+                ₹{Math.round(projection.dailyAvg).toLocaleString('en-IN')}/day avg · {projection.daysLeft} days left
+                {projection.pct !== null ? ` · ${projection.pct}% of budget` : ''}
+              </Text>
+            </View>
+            {projection.isOver ? <TrendingUp color={COLORS.error} size={28} /> : <Target color={COLORS.success} size={28} />}
+          </View>
+        )}
+
+        {/* 7-day bar chart with daily budget line */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Last 7 Days</Text>
           <View style={styles.chartCard}>
-            <SvgBarChart data={weeklyBars} width={chartWidth} height={110} color={COLORS.primary} />
+            <SvgBarChart
+              data={weeklyBars}
+              width={chartWidth}
+              height={110}
+              color={COLORS.primary}
+              referenceLine={dailyBudgetLimit ? { value: dailyBudgetLimit, color: '#EF4444', label: 'Daily limit' } : undefined}
+            />
           </View>
         </View>
 
@@ -172,6 +241,36 @@ export default function DashboardScreen() {
                 </TouchableOpacity>
               );
             })}
+          </View>
+        )}
+
+        {/* Top 3 recurring expenses */}
+        {recurringMerchants.length > 0 && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Recurring Expenses</Text>
+              <Repeat2 color={COLORS.textMuted} size={16} />
+            </View>
+            {recurringMerchants.map((r) => (
+              <TouchableOpacity
+                key={r.merchant}
+                style={styles.recurringCard}
+                onPress={() => setDrill({ title: r.merchant, txns: transactions.filter((t) => t.is_debit && t.merchant === r.merchant) })}
+                activeOpacity={0.75}
+              >
+                <View style={styles.recurringIcon}>
+                  <Repeat2 color={COLORS.primary} size={16} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.recurringName}>{r.merchant}</Text>
+                  <Text style={styles.recurringMeta}>Seen in {r.monthCount} months</Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={styles.recurringAmt}>{formatCurrency(r.avgAmount)}<Text style={styles.recurringAvgLabel}> avg</Text></Text>
+                  <Text style={styles.recurringTotal}>{formatCurrency(r.totalAmount)} total</Text>
+                </View>
+              </TouchableOpacity>
+            ))}
           </View>
         )}
 
@@ -290,4 +389,15 @@ const styles = StyleSheet.create({
   drillMerchant: { fontSize: FONT.sizes.sm, fontWeight: '600', color: COLORS.text },
   drillTime: { fontSize: FONT.sizes.xs, color: COLORS.textMuted, marginTop: 2 },
   drillAmt: { fontSize: FONT.sizes.sm, fontWeight: '700' },
+  projectionCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border, borderLeftWidth: 4, marginBottom: SPACING.md, gap: SPACING.sm },
+  projectionLabel: { fontSize: FONT.sizes.xs, fontWeight: '700', color: COLORS.text, marginBottom: 2 },
+  projectionAmount: { fontSize: FONT.sizes.lg, fontWeight: '700', marginBottom: 2 },
+  projectionSub: { fontSize: FONT.sizes.xs, color: COLORS.textMuted },
+  recurringCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.card, borderRadius: RADIUS.md, padding: SPACING.sm, marginBottom: SPACING.xs, borderWidth: 1, borderColor: COLORS.border, gap: SPACING.sm },
+  recurringIcon: { width: 34, height: 34, borderRadius: RADIUS.md, backgroundColor: COLORS.primary + '15', alignItems: 'center', justifyContent: 'center' },
+  recurringName: { fontSize: FONT.sizes.sm, fontWeight: '600', color: COLORS.text },
+  recurringMeta: { fontSize: FONT.sizes.xs, color: COLORS.textMuted, marginTop: 1 },
+  recurringAmt: { fontSize: FONT.sizes.sm, fontWeight: '700', color: COLORS.text },
+  recurringAvgLabel: { fontSize: FONT.sizes.xs, fontWeight: '400', color: COLORS.textMuted },
+  recurringTotal: { fontSize: FONT.sizes.xs, color: COLORS.textMuted, marginTop: 1 },
 });
