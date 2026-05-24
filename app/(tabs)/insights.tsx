@@ -96,24 +96,34 @@ export default function InsightsScreen() {
     label: cat,
   }));
 
-  // 6-month trend line
-  const monthlyTrend = useMemo(() =>
-    Array.from({ length: 6 }, (_, i) => {
-      const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
-      const start = new Date(d.getFullYear(), d.getMonth(), 1);
-      const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
-      const monthTxns = transactions.filter((t) => { const td = new Date(t.date); return td >= start && td <= end; });
-      const amount = monthTxns.filter((t) => t.is_debit).reduce((s, t) => s + t.amount, 0);
-      const label = d.toLocaleDateString('en-IN', { month: 'short' });
-      const title = d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-      return {
-        label,
-        value: amount,
-        onPress: monthTxns.length > 0 ? () => openDrill(title, monthTxns) : undefined,
-      };
-    }),
-    [transactions]
-  );
+  // Period-aware trend chart:
+  // '3m' → 3 monthly bars; 'this'/'last'/'custom' → daily line for that month
+  const trendData = useMemo(() => {
+    if (period === '3m') {
+      return Array.from({ length: 3 }, (_, i) => {
+        const d = new Date(now.getFullYear(), now.getMonth() - (2 - i), 1);
+        const start = new Date(d.getFullYear(), d.getMonth(), 1);
+        const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59);
+        const mTxns = transactions.filter((t) => { const td = new Date(t.date); return td >= start && td <= end; });
+        const amount = mTxns.filter((t) => t.is_debit).reduce((s, t) => s + t.amount, 0);
+        const title = d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+        return { label: d.toLocaleDateString('en-IN', { month: 'short' }), value: amount, onPress: mTxns.length > 0 ? () => openDrill(title, mTxns) : undefined };
+      });
+    }
+    // Daily line chart for single-month periods
+    const start = periodRange.start;
+    const end = period === 'this' ? now : periodRange.end;
+    const totalDays = Math.min(31, Math.ceil((end.getTime() - start.getTime()) / 86400000) + 1);
+    return Array.from({ length: totalDays }, (_, i) => {
+      const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+      const s = new Date(d); s.setHours(0, 0, 0, 0);
+      const e = new Date(d); e.setHours(23, 59, 59, 999);
+      const dayTxns = periodTxns.filter((t) => { const td = new Date(t.date); return td >= s && td <= e; });
+      const amount = dayTxns.filter((t) => t.is_debit).reduce((sum, t) => sum + t.amount, 0);
+      const title = d.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
+      return { label: String(d.getDate()), value: amount, onPress: dayTxns.length > 0 ? () => openDrill(title, dayTxns) : undefined };
+    });
+  }, [period, periodRange, periodTxns, transactions]);
 
   // Daily spending for current period (last 14 days max)
   const dailyBars = useMemo(() => {
@@ -268,19 +278,21 @@ export default function InsightsScreen() {
                   ))}
                 </View>
               </View>
-              {/* Category progress bars */}
+              {/* Category progress bars — tap to drill */}
               <View style={{ marginTop: SPACING.sm }}>
                 {catBreakdown.map(([cat, amt]) => {
                   const pct = totalSpent > 0 ? amt / totalSpent : 0;
                   const color = CATEGORY_COLORS[cat] ?? '#94A3B8';
+                  const catTxns = debitTxns.filter((t) => t.category_name === cat);
                   return (
-                    <View key={cat} style={styles.catRow}>
+                    <TouchableOpacity key={cat} style={styles.catRow} onPress={() => openDrill(cat, catTxns)} activeOpacity={0.7}>
                       <Text style={styles.catName} numberOfLines={1}>{cat}</Text>
                       <View style={styles.catTrack}>
                         <View style={[styles.catFill, { width: `${pct * 100}%`, backgroundColor: color }]} />
                       </View>
                       <Text style={styles.catAmt}>{Math.round(pct * 100)}%</Text>
-                    </View>
+                      <ChevronRight color={COLORS.border} size={12} />
+                    </TouchableOpacity>
                   );
                 })}
               </View>
@@ -288,11 +300,16 @@ export default function InsightsScreen() {
           </View>
         )}
 
-        {/* 6-month trend line chart */}
+        {/* Period-aware trend chart */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>6-Month Spending Trend</Text>
+          <Text style={styles.sectionTitle}>
+            {period === '3m' ? '3-Month Trend' : 'Daily Spending — ' +
+              new Date(periodRange.start).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}
+          </Text>
           <View style={styles.card}>
-            <SvgLineChart data={monthlyTrend} width={chartWidth} height={150} color={COLORS.primary} />
+            {period === '3m'
+              ? <SvgBarChart data={trendData} width={chartWidth} height={150} color={COLORS.primary} />
+              : <SvgLineChart data={trendData} width={chartWidth} height={150} color={COLORS.primary} />}
           </View>
         </View>
 

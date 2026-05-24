@@ -4,10 +4,11 @@ import {
   Modal, TextInput, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Plus, X, ChevronLeft, ChevronRight } from 'lucide-react-native';
+import { Plus, X, ChevronLeft, ChevronRight, Pencil } from 'lucide-react-native';
 import { useApp } from '@/context/AppContext';
 import { COLORS, SPACING, RADIUS, FONT, ALL_CATEGORIES, CATEGORY_COLORS } from '@/constants/theme';
-import { formatCurrency } from '@/utils/format';
+import { formatCurrency, formatShortDate } from '@/utils/format';
+import type { Transaction } from '@/types/index';
 
 export default function BudgetScreen() {
   const { transactions, budgets, upsertBudget } = useApp();
@@ -20,6 +21,7 @@ export default function BudgetScreen() {
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedCat, setSelectedCat] = useState(ALL_CATEGORIES[0]);
   const [budgetInput, setBudgetInput] = useState('');
+  const [txnSheet, setTxnSheet] = useState<{ cat: string; txns: Transaction[] } | null>(null);
 
   function shiftMonth(delta: number) {
     setViewMonth((m) => {
@@ -58,6 +60,15 @@ export default function BudgetScreen() {
     setSelectedCat(cat);
     setBudgetInput(existing ? String(existing.amount) : '');
     setModalVisible(true);
+  }
+
+  function openCatTransactions(cat: string) {
+    const start = new Date(viewYear, viewMonth - 1, 1);
+    const end = new Date(viewYear, viewMonth, 0, 23, 59, 59);
+    const txns = transactions.filter(
+      (t) => t.is_debit && t.category_name === cat && new Date(t.date) >= start && new Date(t.date) <= end
+    ).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    setTxnSheet({ cat, txns });
   }
 
   async function saveBudget() {
@@ -128,12 +139,15 @@ export default function BudgetScreen() {
           const status = budget ? (pct >= 1 ? 'over' : pct >= 0.8 ? 'warn' : 'ok') : 'none';
 
           return (
-            <TouchableOpacity key={cat} style={styles.catCard} onPress={() => openEdit(cat)}>
+            <TouchableOpacity key={cat} style={styles.catCard} onPress={() => openCatTransactions(cat)} activeOpacity={0.75}>
               <View style={styles.catHeader}>
                 <View style={[styles.catDot, { backgroundColor: color }]} />
                 <Text style={styles.catName}>{cat}</Text>
                 {status === 'over' && <View style={[styles.statusDot, { backgroundColor: COLORS.error }]} />}
                 {status === 'warn' && <View style={[styles.statusDot, { backgroundColor: COLORS.warning }]} />}
+                <TouchableOpacity onPress={(e) => { e.stopPropagation?.(); openEdit(cat); }} hitSlop={8} style={styles.editIcon}>
+                  <Pencil color={COLORS.textMuted} size={14} />
+                </TouchableOpacity>
               </View>
               {budget ? (
                 <>
@@ -153,7 +167,7 @@ export default function BudgetScreen() {
                 </>
               ) : (
                 <View style={styles.noBudgetRow}>
-                  <Text style={styles.noBudgetText}>Tap to set budget</Text>
+                  <Text style={styles.noBudgetText}>No budget set — tap ✏️ to add</Text>
                   {spent > 0 && <Text style={styles.untracked}>Spent: {formatCurrency(spent)}</Text>}
                 </View>
               )}
@@ -202,6 +216,48 @@ export default function BudgetScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Transaction drill-down sheet */}
+      <Modal visible={!!txnSheet} transparent animationType="slide" onRequestClose={() => setTxnSheet(null)}>
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setTxnSheet(null)} />
+        {txnSheet && (
+          <View style={styles.txnSheetWrap}>
+            <View style={styles.handle} />
+            <View style={styles.sheetHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.sheetTitle}>{txnSheet.cat}</Text>
+                <Text style={styles.txnSheetSub}>
+                  {txnSheet.txns.length} transaction{txnSheet.txns.length !== 1 ? 's' : ''} · {' '}
+                  <Text style={{ color: COLORS.error, fontWeight: '700' }}>
+                    {formatCurrency(txnSheet.txns.reduce((s, t) => s + t.amount, 0))}
+                  </Text>
+                  {' '}spent in {monthName}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setTxnSheet(null)}>
+                <X color={COLORS.textMuted} size={22} />
+              </TouchableOpacity>
+            </View>
+            {txnSheet.txns.length === 0 ? (
+              <View style={styles.txnEmpty}>
+                <Text style={styles.txnEmptyText}>No transactions this month</Text>
+              </View>
+            ) : (
+              <ScrollView showsVerticalScrollIndicator={false}>
+                {txnSheet.txns.map((t) => (
+                  <View key={t.id} style={styles.txnRow}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.txnMerchant} numberOfLines={1}>{t.merchant}</Text>
+                      <Text style={styles.txnDate}>{formatShortDate(t.date)}</Text>
+                    </View>
+                    <Text style={[styles.txnAmt, { color: COLORS.error }]}>-{formatCurrency(t.amount)}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        )}
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -228,6 +284,7 @@ const styles = StyleSheet.create({
   catDot: { width: 12, height: 12, borderRadius: 6 },
   catName: { flex: 1, fontSize: FONT.sizes.md, fontWeight: '600', color: COLORS.text },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
+  editIcon: { padding: 4 },
   amtRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
   spentAmt: { fontSize: FONT.sizes.lg, fontWeight: '700' },
   budgetAmt: { fontSize: FONT.sizes.sm, color: COLORS.textMuted },
@@ -248,4 +305,12 @@ const styles = StyleSheet.create({
   amtInput: { borderWidth: 1, borderColor: COLORS.border, borderRadius: RADIUS.md, padding: SPACING.md, fontSize: FONT.sizes.xl, color: COLORS.text, marginBottom: SPACING.md },
   saveBtn: { backgroundColor: COLORS.primary, borderRadius: RADIUS.md, padding: SPACING.md, alignItems: 'center' },
   saveBtnText: { color: '#fff', fontSize: FONT.sizes.md, fontWeight: '700' },
+  txnSheetWrap: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: COLORS.card, borderTopLeftRadius: RADIUS.xl, borderTopRightRadius: RADIUS.xl, padding: SPACING.lg, paddingBottom: 40, maxHeight: '75%' },
+  txnSheetSub: { fontSize: FONT.sizes.sm, color: COLORS.textMuted, marginTop: 2 },
+  txnEmpty: { padding: SPACING.xl, alignItems: 'center' },
+  txnEmptyText: { color: COLORS.textMuted, fontSize: FONT.sizes.sm },
+  txnRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: SPACING.sm, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  txnMerchant: { fontSize: FONT.sizes.sm, fontWeight: '600', color: COLORS.text },
+  txnDate: { fontSize: FONT.sizes.xs, color: COLORS.textMuted, marginTop: 2 },
+  txnAmt: { fontSize: FONT.sizes.sm, fontWeight: '700' },
 });

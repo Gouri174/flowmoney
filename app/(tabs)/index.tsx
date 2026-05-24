@@ -1,9 +1,10 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, useWindowDimensions,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, useWindowDimensions, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Bell, TrendingDown, Wallet, TriangleAlert as AlertTriangle } from 'lucide-react-native';
+import { Bell, TrendingDown, Wallet, TriangleAlert as AlertTriangle, X } from 'lucide-react-native';
+import type { Transaction } from '@/types/index';
 import { router } from 'expo-router';
 import { useAuth } from '@/context/AuthContext';
 import { useApp } from '@/context/AppContext';
@@ -17,7 +18,8 @@ export default function DashboardScreen() {
   const { profile } = useAuth();
   const { transactions, budgets, unreadCount } = useApp();
   const { width } = useWindowDimensions();
-  const chartWidth = width - SPACING.md * 2 - SPACING.md * 2; // padding both sides
+  const chartWidth = width - SPACING.md * 2 - SPACING.md * 2;
+  const [drill, setDrill] = useState<{ title: string; txns: Transaction[] } | null>(null);
 
   const now = new Date();
   const month = now.getMonth() + 1;
@@ -56,6 +58,13 @@ export default function DashboardScreen() {
     [budgets, categorySpend, month, year]
   );
 
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+  const todaySpend = useMemo(
+    () => transactions.filter((t) => t.is_debit && new Date(t.date) >= todayStart && new Date(t.date) <= todayEnd).reduce((s, t) => s + t.amount, 0),
+    [transactions]
+  );
+
   const weeklyBars = useMemo(() => {
     return Array.from({ length: 7 }, (_, i) => {
       const d = new Date();
@@ -63,10 +72,10 @@ export default function DashboardScreen() {
       const label = d.toLocaleDateString('en-IN', { weekday: 'short' });
       const s = new Date(d); s.setHours(0, 0, 0, 0);
       const e = new Date(d); e.setHours(23, 59, 59, 999);
-      const value = transactions
-        .filter((t) => t.is_debit && new Date(t.date) >= s && new Date(t.date) <= e)
-        .reduce((sum, t) => sum + t.amount, 0);
-      return { label, value };
+      const dayTxns = transactions.filter((t) => t.is_debit && new Date(t.date) >= s && new Date(t.date) <= e);
+      const value = dayTxns.reduce((sum, t) => sum + t.amount, 0);
+      const title = d.toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' });
+      return { label, value, onPress: dayTxns.length > 0 ? () => setDrill({ title, txns: dayTxns }) : undefined };
     });
   }, [transactions]);
 
@@ -108,6 +117,11 @@ export default function DashboardScreen() {
         {/* Summary cards */}
         <View style={styles.summaryRow}>
           <View style={styles.summaryCard}>
+            <Text style={styles.summaryLabel}>Today</Text>
+            <Text style={styles.summaryAmount}>{formatCurrency(todaySpend)}</Text>
+            <TrendingDown color={todaySpend > 0 ? COLORS.error : COLORS.textMuted} size={14} />
+          </View>
+          <View style={styles.summaryCard}>
             <Text style={styles.summaryLabel}>This Week</Text>
             <Text style={styles.summaryAmount}>{formatCurrency(weekSpend)}</Text>
             <TrendingDown color={COLORS.error} size={14} />
@@ -146,15 +160,16 @@ export default function DashboardScreen() {
             {categorySpend.slice(0, 5).map(([cat, amount]) => {
               const pct = monthSpend > 0 ? amount / monthSpend : 0;
               const color = CATEGORY_COLORS[cat] ?? COLORS.textMuted;
+              const catTxns = monthTxns.filter((t) => t.category_name === cat);
               return (
-                <View key={cat} style={styles.catRow}>
+                <TouchableOpacity key={cat} style={styles.catRow} onPress={() => setDrill({ title: cat, txns: catTxns })} activeOpacity={0.7}>
                   <View style={[styles.catDot, { backgroundColor: color }]} />
                   <Text style={styles.catName}>{cat}</Text>
                   <View style={styles.catBarTrack}>
                     <View style={[styles.catBarFill, { width: `${pct * 100}%`, backgroundColor: color }]} />
                   </View>
                   <Text style={styles.catAmount}>{formatCurrency(amount)}</Text>
-                </View>
+                </TouchableOpacity>
               );
             })}
           </View>
@@ -191,6 +206,39 @@ export default function DashboardScreen() {
           )}
         </View>
       </ScrollView>
+
+      {/* Drill-down transaction sheet */}
+      <Modal visible={!!drill} transparent animationType="slide" onRequestClose={() => setDrill(null)}>
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setDrill(null)} />
+        {drill && (
+          <View style={styles.drillSheet}>
+            <View style={styles.drillHandle} />
+            <View style={styles.drillHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.drillTitle}>{drill.title}</Text>
+                <Text style={styles.drillSub}>
+                  {drill.txns.length} transactions · <Text style={{ color: COLORS.error, fontWeight: '700' }}>{formatCurrency(drill.txns.reduce((s, t) => s + t.amount, 0))}</Text>
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setDrill(null)}><X color={COLORS.textMuted} size={18} /></TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {drill.txns.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((t) => (
+                <View key={t.id} style={styles.drillRow}>
+                  <MerchantIcon merchant={t.merchant} category={t.category_name} />
+                  <View style={{ flex: 1, marginLeft: SPACING.sm }}>
+                    <Text style={styles.drillMerchant} numberOfLines={1}>{t.merchant}</Text>
+                    <Text style={styles.drillTime}>{formatShortDate(t.date)}</Text>
+                  </View>
+                  <Text style={[styles.drillAmt, { color: t.is_debit ? COLORS.error : COLORS.success }]}>
+                    {t.is_debit ? '-' : '+'}{formatCurrency(t.amount)}
+                  </Text>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        )}
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -232,4 +280,14 @@ const styles = StyleSheet.create({
   txnRight: { alignItems: 'flex-end', gap: 3 },
   txnAmount: { fontSize: FONT.sizes.sm, fontWeight: '700' },
   txnDate: { fontSize: FONT.sizes.xs, color: COLORS.textMuted },
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)' },
+  drillSheet: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: COLORS.card, borderTopLeftRadius: RADIUS.xl, borderTopRightRadius: RADIUS.xl, padding: SPACING.lg, paddingBottom: 40, maxHeight: '75%' },
+  drillHandle: { width: 40, height: 4, backgroundColor: COLORS.border, borderRadius: 2, alignSelf: 'center', marginBottom: SPACING.md },
+  drillHeader: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: SPACING.md },
+  drillTitle: { fontSize: FONT.sizes.lg, fontWeight: '700', color: COLORS.text },
+  drillSub: { fontSize: FONT.sizes.sm, color: COLORS.textMuted, marginTop: 2 },
+  drillRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: SPACING.sm, borderBottomWidth: 1, borderBottomColor: COLORS.border },
+  drillMerchant: { fontSize: FONT.sizes.sm, fontWeight: '600', color: COLORS.text },
+  drillTime: { fontSize: FONT.sizes.xs, color: COLORS.textMuted, marginTop: 2 },
+  drillAmt: { fontSize: FONT.sizes.sm, fontWeight: '700' },
 });
