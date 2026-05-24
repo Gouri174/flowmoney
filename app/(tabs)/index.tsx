@@ -6,7 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   Bell, TrendingDown, TrendingUp, Wallet,
   TriangleAlert as AlertTriangle, X, Repeat2, Target,
-  ChevronLeft, ChevronRight, Flame,
+  ChevronLeft, ChevronRight, Flame, Calendar,
 } from 'lucide-react-native';
 import type { Transaction } from '@/types/index';
 import { router } from 'expo-router';
@@ -43,6 +43,9 @@ export default function DashboardScreen() {
   const { width } = useWindowDimensions();
   const chartWidth = width - SPACING.md * 4;
   const [drill, setDrill] = useState<{ title: string; txns: Transaction[] } | null>(null);
+  const [customVisible, setCustomVisible] = useState(false);
+  const [customPickMonth, setCustomPickMonth] = useState(new Date().getMonth());   // 0-indexed
+  const [customPickYear, setCustomPickYear] = useState(new Date().getFullYear());
 
   const now = new Date();
   const month = now.getMonth() + 1;
@@ -193,6 +196,66 @@ export default function DashboardScreen() {
 
   const recentTxns = transactions.slice(0, 5);
 
+  // ── drill data for summary cards (all txns, not just debit) ──────────────
+  const todayAllTxns = useMemo(
+    () => transactions.filter((t) => new Date(t.date) >= todayS && new Date(t.date) <= todayE),
+    [transactions]
+  );
+  const weekAllTxns = useMemo(
+    () => transactions.filter((t) => new Date(t.date) >= weekStart),
+    [transactions, weekStart]
+  );
+  const monthAllTxns = useMemo(
+    () => transactions.filter((t) => new Date(t.date) >= monthStart),
+    [transactions, monthStart]
+  );
+
+  // ── custom period picker ──────────────────────────────────────────────────
+  const customAtCurrent = customPickYear === now.getFullYear() && customPickMonth === now.getMonth();
+  function shiftCustomPick(delta: number) {
+    setCustomPickMonth((m) => {
+      const nm = m + delta;
+      if (nm < 0) { setCustomPickYear((y) => y - 1); return 11; }
+      if (nm > 11) { setCustomPickYear((y) => y + 1); return 0; }
+      return nm;
+    });
+  }
+  const customMonthTxns = useMemo(() => {
+    const start = new Date(customPickYear, customPickMonth, 1);
+    const end = new Date(customPickYear, customPickMonth + 1, 0, 23, 59, 59);
+    return transactions.filter((t) => { const d = new Date(t.date); return d >= start && d <= end; });
+  }, [transactions, customPickMonth, customPickYear]);
+
+  function openCustomDrill(label: string, txns: Transaction[]) {
+    setCustomVisible(false);
+    // slight delay so modal close animation doesn't clash with drill open
+    setTimeout(() => setDrill({ title: label, txns }), 150);
+  }
+  function handlePreset(key: string) {
+    const s = new Date(); s.setHours(0, 0, 0, 0);
+    const e = new Date(); e.setHours(23, 59, 59, 999);
+    let start = s, end = e, label = '';
+    if (key === 'yesterday') {
+      start = new Date(s); start.setDate(start.getDate() - 1);
+      end = new Date(s); end.setTime(end.getTime() - 1);
+      label = 'Yesterday';
+    } else if (key === '7d') {
+      start = new Date(s); start.setDate(start.getDate() - 6);
+      label = 'Last 7 Days';
+    } else if (key === '14d') {
+      start = new Date(s); start.setDate(start.getDate() - 13);
+      label = 'Last 14 Days';
+    } else if (key === '30d') {
+      start = new Date(s); start.setDate(start.getDate() - 29);
+      label = 'Last 30 Days';
+    } else if (key === '90d') {
+      start = new Date(s); start.setDate(start.getDate() - 89);
+      label = 'Last 90 Days';
+    }
+    const txns = transactions.filter((t) => { const d = new Date(t.date); return d >= start && d <= end; });
+    openCustomDrill(label, txns);
+  }
+
   // ── render ────────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -234,14 +297,19 @@ export default function DashboardScreen() {
           </View>
         )}
 
-        {/* ── Summary cards ── */}
+        {/* ── Summary cards — tappable ── */}
         <View style={styles.summaryRow}>
           {[
-            { label: 'Today', value: todaySpend, delta: null },
-            { label: 'This Week', value: weekSpend, delta: deltaTag(weekSpend, lastWeekSpend) },
-            { label: 'This Month', value: monthSpend, delta: deltaTag(monthSpend, lastMonthSpend) },
+            { label: 'Today',      value: todaySpend, delta: null,                                    txns: todayAllTxns, drillTitle: 'Today' },
+            { label: 'This Week',  value: weekSpend,  delta: deltaTag(weekSpend, lastWeekSpend),       txns: weekAllTxns,  drillTitle: 'This Week' },
+            { label: 'This Month', value: monthSpend, delta: deltaTag(monthSpend, lastMonthSpend),     txns: monthAllTxns, drillTitle: 'This Month' },
           ].map((card) => (
-            <View key={card.label} style={styles.summaryCard}>
+            <TouchableOpacity
+              key={card.label}
+              style={styles.summaryCard}
+              onPress={() => card.txns.length > 0 && setDrill({ title: card.drillTitle, txns: card.txns })}
+              activeOpacity={0.75}
+            >
               <Text style={styles.summaryLabel}>{card.label}</Text>
               <Text style={styles.summaryAmount} numberOfLines={1} adjustsFontSizeToFit>{formatCurrency(card.value)}</Text>
               {card.delta ? (
@@ -249,9 +317,16 @@ export default function DashboardScreen() {
               ) : (
                 <TrendingDown color={card.value > 0 ? COLORS.error : COLORS.textMuted} size={12} />
               )}
-            </View>
+            </TouchableOpacity>
           ))}
         </View>
+
+        {/* ── Custom period button ── */}
+        <TouchableOpacity style={styles.customBtn} onPress={() => setCustomVisible(true)} activeOpacity={0.8}>
+          <Calendar color={COLORS.primary} size={14} />
+          <Text style={styles.customBtnText}>Custom period</Text>
+          <ChevronRight color={COLORS.primary} size={14} />
+        </TouchableOpacity>
 
         {/* ── Remaining budget ── */}
         {remaining !== null && (
@@ -466,6 +541,60 @@ export default function DashboardScreen() {
           </View>
         )}
       </Modal>
+
+      {/* ── Custom period picker modal ── */}
+      <Modal visible={customVisible} transparent animationType="slide" onRequestClose={() => setCustomVisible(false)}>
+        <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={() => setCustomVisible(false)} />
+        <View style={styles.customSheet}>
+          <View style={styles.drillHandle} />
+          <View style={styles.drillHeader}>
+            <Text style={styles.drillTitle}>Custom Period</Text>
+            <TouchableOpacity onPress={() => setCustomVisible(false)}><X color={COLORS.textMuted} size={18} /></TouchableOpacity>
+          </View>
+
+          {/* Quick presets */}
+          <Text style={styles.customSectionLabel}>Quick pick</Text>
+          <View style={styles.presetRow}>
+            {[
+              { key: 'yesterday', label: 'Yesterday' },
+              { key: '7d',        label: 'Last 7 Days' },
+              { key: '14d',       label: 'Last 14 Days' },
+              { key: '30d',       label: 'Last 30 Days' },
+              { key: '90d',       label: 'Last 90 Days' },
+            ].map(({ key, label }) => (
+              <TouchableOpacity key={key} style={styles.presetChip} onPress={() => handlePreset(key)} activeOpacity={0.75}>
+                <Text style={styles.presetText}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Month picker */}
+          <Text style={styles.customSectionLabel}>By month</Text>
+          <View style={styles.customMonthNav}>
+            <TouchableOpacity style={styles.calNavBtn} onPress={() => shiftCustomPick(-1)}>
+              <ChevronLeft color={COLORS.primary} size={20} />
+            </TouchableOpacity>
+            <Text style={styles.customMonthLabel}>
+              {new Date(customPickYear, customPickMonth, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+            </Text>
+            <TouchableOpacity style={styles.calNavBtn} onPress={() => shiftCustomPick(1)} disabled={customAtCurrent}>
+              <ChevronRight color={customAtCurrent ? COLORS.border : COLORS.primary} size={20} />
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.customCount}>{customMonthTxns.length} transactions · {formatCurrency(customMonthTxns.filter((t) => t.is_debit).reduce((s, t) => s + t.amount, 0))} spent</Text>
+
+          <TouchableOpacity
+            style={[styles.viewBtn, customMonthTxns.length === 0 && { opacity: 0.4 }]}
+            onPress={() => openCustomDrill(
+              new Date(customPickYear, customPickMonth, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' }),
+              customMonthTxns
+            )}
+            disabled={customMonthTxns.length === 0}
+          >
+            <Text style={styles.viewBtnText}>View {customMonthTxns.length} Transactions</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -558,4 +687,20 @@ const styles = StyleSheet.create({
   drillMerchant: { fontSize: FONT.sizes.sm, fontWeight: '600', color: COLORS.text },
   drillTime: { fontSize: FONT.sizes.xs, color: COLORS.textMuted, marginTop: 2 },
   drillAmt: { fontSize: FONT.sizes.sm, fontWeight: '700' },
+
+  // Custom period button
+  customBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, backgroundColor: COLORS.card, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.primary + '50', paddingVertical: 8, marginBottom: SPACING.md },
+  customBtnText: { fontSize: FONT.sizes.sm, fontWeight: '600', color: COLORS.primary, flex: 1, textAlign: 'center' },
+
+  // Custom picker modal
+  customSheet: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: COLORS.card, borderTopLeftRadius: RADIUS.xl, borderTopRightRadius: RADIUS.xl, padding: SPACING.lg, paddingBottom: 40 },
+  customSectionLabel: { fontSize: FONT.sizes.xs, fontWeight: '700', color: COLORS.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: SPACING.sm, marginTop: SPACING.md },
+  presetRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACING.xs },
+  presetChip: { paddingHorizontal: SPACING.md, paddingVertical: 8, borderRadius: RADIUS.full, backgroundColor: COLORS.primary + '12', borderWidth: 1, borderColor: COLORS.primary + '30' },
+  presetText: { fontSize: FONT.sizes.sm, fontWeight: '600', color: COLORS.primary },
+  customMonthNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: COLORS.bg, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: SPACING.sm, paddingVertical: 10 },
+  customMonthLabel: { fontSize: FONT.sizes.md, fontWeight: '700', color: COLORS.text },
+  customCount: { fontSize: FONT.sizes.sm, color: COLORS.textMuted, textAlign: 'center', marginTop: SPACING.sm, marginBottom: SPACING.sm },
+  viewBtn: { backgroundColor: COLORS.primary, borderRadius: RADIUS.md, padding: SPACING.md, alignItems: 'center', marginTop: SPACING.sm },
+  viewBtnText: { color: '#fff', fontSize: FONT.sizes.md, fontWeight: '700' },
 });
