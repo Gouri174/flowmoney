@@ -4,39 +4,54 @@ import {
   Modal, TextInput, KeyboardAvoidingView, Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Plus, X } from 'lucide-react-native';
+import { Plus, X, ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { useApp } from '@/context/AppContext';
 import { COLORS, SPACING, RADIUS, FONT, ALL_CATEGORIES, CATEGORY_COLORS } from '@/constants/theme';
-import { formatCurrency, getMonthStart } from '@/utils/format';
+import { formatCurrency } from '@/utils/format';
 
 export default function BudgetScreen() {
   const { transactions, budgets, upsertBudget } = useApp();
   const now = new Date();
-  const month = now.getMonth() + 1;
-  const year = now.getFullYear();
-  const monthStart = getMonthStart();
+
+  // Month navigation state (1-indexed month)
+  const [viewMonth, setViewMonth] = useState(now.getMonth() + 1);
+  const [viewYear, setViewYear] = useState(now.getFullYear());
 
   const [modalVisible, setModalVisible] = useState(false);
   const [selectedCat, setSelectedCat] = useState(ALL_CATEGORIES[0]);
   const [budgetInput, setBudgetInput] = useState('');
 
+  function shiftMonth(delta: number) {
+    setViewMonth((m) => {
+      let nm = m + delta;
+      if (nm < 1) { setViewYear((y) => y - 1); return 12; }
+      if (nm > 12) { setViewYear((y) => y + 1); return 1; }
+      return nm;
+    });
+  }
+
+  const isCurrentOrFuture = viewYear > now.getFullYear() ||
+    (viewYear === now.getFullYear() && viewMonth >= now.getMonth() + 1);
+
   const monthBudgets = useMemo(
-    () => budgets.filter((b) => b.month === month && b.year === year),
-    [budgets, month, year]
+    () => budgets.filter((b) => b.month === viewMonth && b.year === viewYear),
+    [budgets, viewMonth, viewYear]
   );
 
   const categorySpend = useMemo(() => {
     const map: Record<string, number> = {};
+    const start = new Date(viewYear, viewMonth - 1, 1);
+    const end = new Date(viewYear, viewMonth, 0, 23, 59, 59);
     transactions
-      .filter((t) => t.is_debit && new Date(t.date) >= monthStart)
+      .filter((t) => t.is_debit && new Date(t.date) >= start && new Date(t.date) <= end)
       .forEach((t) => { map[t.category_name] = (map[t.category_name] ?? 0) + t.amount; });
     return map;
-  }, [transactions, monthStart]);
+  }, [transactions, viewMonth, viewYear]);
 
   const totalBudgeted = monthBudgets.reduce((s, b) => s + b.amount, 0);
   const totalSpent = Object.values(categorySpend).reduce((s, v) => s + v, 0);
   const overallPct = totalBudgeted > 0 ? totalSpent / totalBudgeted : 0;
-  const monthName = now.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+  const monthName = new Date(viewYear, viewMonth - 1, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
   function openEdit(cat: string) {
     const existing = monthBudgets.find((b) => b.category_name === cat);
@@ -48,7 +63,7 @@ export default function BudgetScreen() {
   async function saveBudget() {
     const amount = parseFloat(budgetInput);
     if (!isNaN(amount) && amount > 0) {
-      await upsertBudget(selectedCat, amount, month, year);
+      await upsertBudget(selectedCat, amount, viewMonth, viewYear);
     }
     setModalVisible(false);
     setBudgetInput('');
@@ -58,12 +73,24 @@ export default function BudgetScreen() {
     <SafeAreaView style={styles.safe} edges={['top']}>
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scroll}>
         <View style={styles.header}>
-          <View>
-            <Text style={styles.heading}>Budget</Text>
-            <Text style={styles.sub}>{monthName}</Text>
-          </View>
+          <Text style={styles.heading}>Budget</Text>
           <TouchableOpacity style={styles.addBtn} onPress={() => { setSelectedCat(ALL_CATEGORIES[0]); setBudgetInput(''); setModalVisible(true); }}>
             <Plus color="#fff" size={20} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Month navigator */}
+        <View style={styles.monthNav}>
+          <TouchableOpacity style={styles.monthNavBtn} onPress={() => shiftMonth(-1)}>
+            <ChevronLeft color={COLORS.primary} size={20} />
+          </TouchableOpacity>
+          <Text style={styles.monthNavLabel}>{monthName}</Text>
+          <TouchableOpacity
+            style={styles.monthNavBtn}
+            onPress={() => shiftMonth(1)}
+            disabled={isCurrentOrFuture}
+          >
+            <ChevronRight color={isCurrentOrFuture ? COLORS.border : COLORS.primary} size={20} />
           </TouchableOpacity>
         </View>
 
@@ -182,10 +209,12 @@ export default function BudgetScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: COLORS.bg },
   scroll: { padding: SPACING.md, paddingBottom: 100 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.md },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.sm },
   heading: { fontSize: FONT.sizes.xl, fontWeight: '700', color: COLORS.text },
-  sub: { fontSize: FONT.sizes.sm, color: COLORS.textMuted, marginTop: 2 },
   addBtn: { backgroundColor: COLORS.primary, borderRadius: RADIUS.full, width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  monthNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: COLORS.card, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: SPACING.sm, paddingVertical: 8, marginBottom: SPACING.md },
+  monthNavBtn: { padding: 4 },
+  monthNavLabel: { fontSize: FONT.sizes.md, fontWeight: '700', color: COLORS.text },
   overviewCard: { backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border, marginBottom: SPACING.md, gap: SPACING.sm },
   overviewRow: { flexDirection: 'row', justifyContent: 'space-between' },
   overviewLabel: { fontSize: FONT.sizes.xs, color: COLORS.textMuted, fontWeight: '600', textTransform: 'uppercase' },

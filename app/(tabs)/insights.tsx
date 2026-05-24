@@ -10,13 +10,16 @@ import DonutChart from '@/components/DonutChart';
 import SvgBarChart from '@/components/SvgBarChart';
 import SvgLineChart from '@/components/SvgLineChart';
 
-type Period = 'this' | 'last' | '3m';
+type Period = 'this' | 'last' | '3m' | 'custom';
 
 export default function InsightsScreen() {
   const { transactions } = useApp();
   const { width } = useWindowDimensions();
   const chartWidth = width - SPACING.md * 2 - 32;
   const [period, setPeriod] = useState<Period>('this');
+  // Custom month/year picker
+  const [customMonth, setCustomMonth] = useState(new Date().getMonth()); // 0-indexed
+  const [customYear, setCustomYear] = useState(new Date().getFullYear());
   // Stack-based drill: each entry is a view level — push to go deeper, pop to go back
   const [drillStack, setDrillStack] = useState<Array<{ title: string; txns: Transaction[] }>>([]);
   const drill = drillStack[drillStack.length - 1] ?? null;
@@ -37,6 +40,15 @@ export default function InsightsScreen() {
 
   const now = new Date();
 
+  function shiftCustomMonth(delta: number) {
+    setCustomMonth((m) => {
+      let nm = m + delta;
+      if (nm < 0) { setCustomYear((y) => y - 1); return 11; }
+      if (nm > 11) { setCustomYear((y) => y + 1); return 0; }
+      return nm;
+    });
+  }
+
   const periodRange = useMemo(() => {
     if (period === 'this') {
       return { start: new Date(now.getFullYear(), now.getMonth(), 1), end: now };
@@ -47,8 +59,14 @@ export default function InsightsScreen() {
         end: new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59),
       };
     }
+    if (period === 'custom') {
+      return {
+        start: new Date(customYear, customMonth, 1),
+        end: new Date(customYear, customMonth + 1, 0, 23, 59, 59),
+      };
+    }
     return { start: new Date(now.getFullYear(), now.getMonth() - 2, 1), end: now };
-  }, [period]);
+  }, [period, customMonth, customYear]);
 
   const periodTxns = useMemo(
     () => transactions.filter((t) => {
@@ -162,18 +180,40 @@ export default function InsightsScreen() {
 
         {/* Period selector */}
         <View style={styles.periodRow}>
-          {(['this', 'last', '3m'] as Period[]).map((p) => (
+          {(['this', 'last', '3m', 'custom'] as Period[]).map((p) => (
             <TouchableOpacity
               key={p}
               style={[styles.periodBtn, period === p && styles.periodBtnActive]}
               onPress={() => setPeriod(p)}
             >
               <Text style={[styles.periodText, period === p && styles.periodTextActive]}>
-                {p === 'this' ? 'This Month' : p === 'last' ? 'Last Month' : '3 Months'}
+                {p === 'this' ? 'This Month' : p === 'last' ? 'Last Month' : p === '3m' ? '3 Months' : 'Custom'}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
+
+        {/* Custom month navigator */}
+        {period === 'custom' && (
+          <View style={styles.monthNav}>
+            <TouchableOpacity style={styles.monthNavBtn} onPress={() => shiftCustomMonth(-1)}>
+              <ChevronLeft color={COLORS.primary} size={20} />
+            </TouchableOpacity>
+            <Text style={styles.monthNavLabel}>
+              {new Date(customYear, customMonth, 1).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
+            </Text>
+            <TouchableOpacity
+              style={styles.monthNavBtn}
+              onPress={() => shiftCustomMonth(1)}
+              disabled={customYear === now.getFullYear() && customMonth >= now.getMonth()}
+            >
+              <ChevronRight color={
+                customYear === now.getFullYear() && customMonth >= now.getMonth()
+                  ? COLORS.border : COLORS.primary
+              } size={20} />
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Income vs Expense summary */}
         <View style={styles.summaryRow}>
@@ -357,11 +397,14 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: COLORS.bg },
   scroll: { padding: SPACING.md, paddingBottom: 100 },
   heading: { fontSize: FONT.sizes.xl, fontWeight: '700', color: COLORS.text, marginBottom: SPACING.sm },
-  periodRow: { flexDirection: 'row', gap: SPACING.xs, marginBottom: SPACING.md },
+  periodRow: { flexDirection: 'row', gap: SPACING.xs, marginBottom: SPACING.sm },
   periodBtn: { flex: 1, paddingVertical: 8, borderRadius: RADIUS.md, backgroundColor: COLORS.card, borderWidth: 1, borderColor: COLORS.border, alignItems: 'center' },
   periodBtnActive: { backgroundColor: COLORS.primary, borderColor: COLORS.primary },
   periodText: { fontSize: FONT.sizes.xs, color: COLORS.textMuted, fontWeight: '600' },
   periodTextActive: { color: '#fff' },
+  monthNav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: COLORS.card, borderRadius: RADIUS.md, borderWidth: 1, borderColor: COLORS.border, paddingHorizontal: SPACING.sm, paddingVertical: 6, marginBottom: SPACING.md },
+  monthNavBtn: { padding: 4 },
+  monthNavLabel: { fontSize: FONT.sizes.sm, fontWeight: '700', color: COLORS.text },
   summaryRow: { flexDirection: 'row', gap: SPACING.sm, marginBottom: SPACING.md },
   summaryCard: { flex: 1, backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border, borderLeftWidth: 4, gap: 4 },
   summaryIcon: { marginBottom: 2 },

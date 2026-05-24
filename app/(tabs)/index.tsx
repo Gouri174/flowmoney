@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Bell, TrendingDown, Wallet, TriangleAlert as AlertTriangle } from 'lucide-react-native';
@@ -11,10 +11,13 @@ import { COLORS, SPACING, RADIUS, FONT, CATEGORY_COLORS } from '@/constants/them
 import { formatCurrency, formatShortDate, getMonthStart, getWeekStart } from '@/utils/format';
 import MerchantIcon from '@/components/MerchantIcon';
 import CategoryBadge from '@/components/CategoryBadge';
+import SvgBarChart from '@/components/SvgBarChart';
 
 export default function DashboardScreen() {
   const { profile } = useAuth();
   const { transactions, budgets, unreadCount } = useApp();
+  const { width } = useWindowDimensions();
+  const chartWidth = width - SPACING.md * 2 - SPACING.md * 2; // padding both sides
 
   const now = new Date();
   const month = now.getMonth() + 1;
@@ -60,14 +63,13 @@ export default function DashboardScreen() {
       const label = d.toLocaleDateString('en-IN', { weekday: 'short' });
       const s = new Date(d); s.setHours(0, 0, 0, 0);
       const e = new Date(d); e.setHours(23, 59, 59, 999);
-      const amount = transactions
+      const value = transactions
         .filter((t) => t.is_debit && new Date(t.date) >= s && new Date(t.date) <= e)
         .reduce((sum, t) => sum + t.amount, 0);
-      return { label, amount };
+      return { label, value };
     });
   }, [transactions]);
 
-  const maxBar = Math.max(...weeklyBars.map((d) => d.amount), 1);
   const recentTxns = transactions.slice(0, 5);
 
   return (
@@ -132,15 +134,8 @@ export default function DashboardScreen() {
         {/* 7-day bar chart */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Last 7 Days</Text>
-          <View style={styles.barChart}>
-            {weeklyBars.map((d, i) => (
-              <View key={i} style={styles.barItem}>
-                <View style={styles.barTrack}>
-                  <View style={[styles.barFill, { height: `${Math.max(4, (d.amount / maxBar) * 100)}%` }]} />
-                </View>
-                <Text style={styles.barLabel}>{d.label}</Text>
-              </View>
-            ))}
+          <View style={styles.chartCard}>
+            <SvgBarChart data={weeklyBars} width={chartWidth} height={110} color={COLORS.primary} />
           </View>
         </View>
 
@@ -222,11 +217,7 @@ const styles = StyleSheet.create({
   sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: SPACING.sm },
   sectionTitle: { fontSize: FONT.sizes.md, fontWeight: '700', color: COLORS.text, marginBottom: SPACING.sm },
   seeAll: { fontSize: FONT.sizes.sm, color: COLORS.primary, fontWeight: '600' },
-  barChart: { flexDirection: 'row', height: 96, gap: SPACING.xs, alignItems: 'flex-end', backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border },
-  barItem: { flex: 1, alignItems: 'center', gap: 4 },
-  barTrack: { flex: 1, width: '100%', justifyContent: 'flex-end', backgroundColor: COLORS.border, borderRadius: 4 },
-  barFill: { width: '100%', backgroundColor: COLORS.primary, borderRadius: 4 },
-  barLabel: { fontSize: 9, color: COLORS.textMuted },
+  chartCard: { backgroundColor: COLORS.card, borderRadius: RADIUS.lg, padding: SPACING.md, borderWidth: 1, borderColor: COLORS.border },
   catRow: { flexDirection: 'row', alignItems: 'center', gap: SPACING.sm, marginBottom: SPACING.sm },
   catDot: { width: 10, height: 10, borderRadius: 5 },
   catName: { fontSize: FONT.sizes.sm, color: COLORS.text, width: 110 },
