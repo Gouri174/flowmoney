@@ -214,116 +214,135 @@ function parseBankStatementPdf(
   }
   const sortedRows = [...rowMap.entries()].sort((a, b) => a[0] - b[0]);
 
-  // Find column layout
+  // Detect column boundaries (description zone vs amount zone)
   const cols = detectColumns(sortedRows);
-  if (!cols) return []; // no recognizable table structure
+  if (!cols) return [];
 
-  const rows: ParsedRow[] = [];
-  let pendingDate: Date | null = null;
-  let pendingDesc = '';
-  let pendingDebit = 0;
-  let pendingCredit = 0;
-
-  function flush() {
-    if (!pendingDate) return;
-    if (pendingDebit === 0 && pendingCredit === 0) return;
-    if (!pendingDesc.trim()) return;
-
-    const isDebit = pendingDebit > 0;
-    const amount = isDebit ? pendingDebit : pendingCredit;
-    const merchant = extractMerchant(pendingDesc);
-
-    // Extract UPI TXN ID for cross-source dedup
-    const upiIdMatch = pendingDesc.match(/\/(\d{10,12})\//);
-
-    const row: ParsedRow & { __upiId?: string } = {
-      date: pendingDate.toISOString(),
-      merchant,
-      amount,
-      description: pendingDesc.trim(),
-      isDebit,
-      category: categorize(merchant, pendingDesc),
-    };
-    if (upiIdMatch?.[1]) row.__upiId = upiIdMatch[1];
-    rows.push(row);
-
-    pendingDate = null;
-    pendingDesc = '';
-    pendingDebit = 0;
-    pendingCredit = 0;
+  // ── PASS 1: collect raw rows (date + description + all decimal amounts) ────
+  // We do NOT try to classify debit/credit here — column ordering varies by bank.
+  // Instead we record all decimal amounts in the row sorted by x position.
+  interface RawRow {
+    date: Date;
+    desc: string;
+    amounts: Array<{ val: number; x: number }>; // sorted left→right
   }
 
-  // Some banks put date on its own line, others inline with description
-  // We handle both: if leftmost item is a date, start a new row
+  const rawRows: RawRow[] = [];
+  let pendingDate: Date | null = null;
+  let pendingDesc = '';
+  let pendingAmts: Array<{ val: number; x: number }> = [];
+
+  function flushRaw() {
+    if (!pendingDate) return;
+    rawRows.push({
+      date: pendingDate,
+      desc: pendingDesc.trim(),
+      amounts: [...pendingAmts].sort((a, b) => a.x - b.x),
+    });
+    pendingDate = null; pendingDesc = ''; pendingAmts = [];
+  }
+
   for (const [, rowItems] of sortedRows) {
     const sorted = [...rowItems].sort((a, b) => a.x - b.x);
     const rowText = sorted.map(i => i.str).join(' ');
 
     if (SKIP_ROW_RE.test(rowText.trim())) continue;
 
-    // Check if any header col keyword present → skip
-    let isHeaderRow = false;
+    let isHeader = false;
     for (const re of Object.values(COL_HEADER)) {
-      if (sorted.some(i => re.test(i.str.trim()))) { isHeaderRow = true; break; }
+      if (sorted.some(i => re.test(i.str.trim()))) { isHeader = true; break; }
     }
-    if (isHeaderRow) continue;
+    if (isHeader) continue;
 
-    // Classify each item
     let rowDate: Date | null = null;
     let rowDesc = '';
-    let rowDebit = 0;
-    let rowCredit = 0;
-    let rowHasBalance = false;
+    const rowAmts: Array<{ val: number; x: number }> = [];
 
     for (const item of sorted) {
       const s = item.str.trim();
       if (!s) continue;
-
-      // Balance column → just marks end of row, don't use value
-      if (item.x >= cols.balanceX) {
-        if (isAmountStr(s)) rowHasBalance = true;
-        continue;
-      }
-
-      // Debit column
-      if (item.x >= cols.debitX && item.x < cols.creditX) {
-        if (isAmountStr(s) && parseAmountStr(s) > 0) rowDebit = parseAmountStr(s);
-        continue;
-      }
-
-      // Credit column
-      if (item.x >= cols.creditX && item.x < cols.balanceX) {
-        if (isAmountStr(s) && parseAmountStr(s) > 0) rowCredit = parseAmountStr(s);
-        continue;
-      }
-
-      // Description / date zone (x < debitX)
-      if (item.x < cols.descMaxX) {
-        // Is it a date?
-        const d = parseAnyDate(s);
-        if (d && !rowDate) {
-          rowDate = d;
-        } else if (!isAmountStr(s)) {
-          rowDesc += (rowDesc ? ' ' : '') + s;
+      // Amount zone: right of description boundary
+      if (item.x >= cols.descMaxX) {
+        if (isAmountStr(s)) {
+          const val = parseAmountStr(s);
+          if (val > 0) rowAmts.push({ val, x: item.x });
         }
+      } else {
+        // Description / date zone
+        const d = parseAnyDate(s);
+        if (d && !rowDate) rowDate = d;
+        else if (!isAmountStr(s)) rowDesc += (rowDesc ? ' ' : '') + s;
       }
     }
 
-    // If this row starts a new transaction (has a date)
     if (rowDate) {
-      flush(); // save previous
-      pendingDate = rowDate;
-      pendingDesc = rowDesc;
-      pendingDebit = rowDebit;
-      pendingCredit = rowCredit;
+      flushRaw();
+      pendingDate = rowDate; pendingDesc = rowDesc; pendingAmts = rowAmts;
     } else if (pendingDate) {
-      // Continuation line — append description, merge amounts
       if (rowDesc) pendingDesc += ' ' + rowDesc;
-      if (rowDebit > 0 && pendingDebit === 0) pendingDebit = rowDebit;
-      if (rowCredit > 0 && pendingCredit === 0) pendingCredit = rowCredit;
+      pendingAmts.push(...rowAmts);
     }
   }
-  flush();
+  flushRaw();
+
+  // ── PASS 2: determine debit/credit from the running balance ────────────────
+  //
+  // Key insight: the rightmost decimal in each row is always the running balance.
+  // The second-to-last decimal is the transaction amount.
+  //
+  //   balance went DOWN  →  debit  (money left the account)
+  //   balance went UP    →  credit (money entered the account)
+  //
+  // This is 100% bank-independent — no column ordering assumptions needed.
+
+  const rows: ParsedRow[] = [];
+  let prevBalance: number | null = null;
+
+  for (const raw of rawRows) {
+    const amts = raw.amounts; // already sorted left→right
+    if (amts.length === 0) continue;
+
+    // Rightmost amount = running balance
+    const newBalance = amts[amts.length - 1].val;
+
+    if (amts.length === 1) {
+      // Only a balance figure (opening B/F row, or a row with no transaction amount)
+      prevBalance = newBalance;
+      continue;
+    }
+
+    // Transaction amount = everything except the rightmost (balance)
+    // Usually exactly one; if more than one, take the first (some banks split debit/credit cols)
+    const txnAmt = amts[0].val;
+    if (txnAmt <= 0) { prevBalance = newBalance; continue; }
+    if (!raw.desc.trim()) { prevBalance = newBalance; continue; }
+    if (SKIP_ROW_RE.test(raw.desc)) { prevBalance = newBalance; continue; }
+
+    // Determine direction from balance movement
+    let isDebit: boolean;
+    if (prevBalance !== null) {
+      isDebit = newBalance < prevBalance - 0.005; // debit = balance decreased
+    } else {
+      // No previous balance yet — fall back to keyword heuristic
+      isDebit = !/RFND|REFUND|REVERSAL|RECEIVED|SALARY|CREDIT|NEFT.*CR/i.test(raw.desc);
+    }
+
+    prevBalance = newBalance;
+
+    const merchant = extractMerchant(raw.desc);
+    const upiIdMatch = raw.desc.match(/\/(\d{10,12})\//);
+
+    const row: ParsedRow & { __upiId?: string } = {
+      date: raw.date.toISOString(),
+      merchant,
+      amount: txnAmt,
+      description: raw.desc,
+      isDebit,
+      category: categorize(merchant, raw.desc),
+    };
+    if (upiIdMatch?.[1]) row.__upiId = upiIdMatch[1];
+    rows.push(row);
+  }
 
   return rows;
 }
