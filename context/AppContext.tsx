@@ -5,6 +5,7 @@ import type { Transaction, Budget, AppNotification, ConnectedAccount } from '@/t
 import { buildTransaction, MOCK_PROVIDERS } from '@/services/bankAggregator';
 import { pickAndParseCSV, type ParsedRow } from '@/services/csvImporter';
 import { pickAndParseTakeout } from '@/services/takeoutImporter';
+import { pickAndParsePdf, type PdfImportResult } from '@/services/pdfImporter';
 
 interface AppContextValue {
   transactions: Transaction[];
@@ -19,9 +20,10 @@ interface AppContextValue {
   markAllRead: () => Promise<void>;
   upsertBudget: (category: string, amount: number, month: number, year: number) => Promise<void>;
   updateTransactionCategory: (id: string, category: string) => Promise<void>;
-  importCsvTransactions: (rows: ParsedRow[]) => Promise<{ imported: number; skipped: number }>;
+  importCsvTransactions: (rows: ParsedRow[], source?: 'csv' | 'gpay' | 'pdf') => Promise<{ imported: number; skipped: number }>;
   pickCsvAndPreview: () => Promise<{ rows: ParsedRow[]; errors: string[]; fileName: string } | null>;
   pickTakeoutAndPreview: () => Promise<{ rows: ParsedRow[]; errors: string[]; fileName: string } | null>;
+  pickPdfAndPreview: () => Promise<PdfImportResult | null>;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -174,29 +176,39 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return await pickAndParseTakeout();
   }, []);
 
-  const importCsvTransactions = useCallback(async (rows: ParsedRow[]) => {
+  const pickPdfAndPreview = useCallback(async () => {
+    return await pickAndParsePdf();
+  }, []);
+
+  const importCsvTransactions = useCallback(async (rows: ParsedRow[], source: 'csv' | 'gpay' | 'pdf' = 'csv') => {
     if (!user || importing) return { imported: 0, skipped: 0 };
     setImporting(true);
     let imported = 0;
     let skipped = 0;
     try {
-      // Batch in chunks of 50 to avoid request size limits
       const CHUNK = 50;
       for (let i = 0; i < rows.length; i += CHUNK) {
-        const chunk = rows.slice(i, i + CHUNK).map((r, idx) => ({
-          user_id: user.id,
-          account_id: null,
-          external_id: `csv_${r.date}_${r.amount}_${i + idx}`,
-          amount: r.amount,
-          currency: 'INR',
-          merchant: r.merchant,
-          description: r.description,
-          category_name: r.category,
-          payment_method: 'Bank',
-          date: r.date,
-          is_debit: r.isDebit,
-          notes: null as string | null,
-        }));
+        const chunk = rows.slice(i, i + CHUNK).map((r, idx) => {
+          // Use UPI transaction ID for dedup when available (cross-source: GPay + ICICI both carry the same UPI ID)
+          const upiId = (r as any).__upiId as string | undefined;
+          const externalId = upiId
+            ? `upi_${upiId}`
+            : `${source}_${r.date}_${r.amount}_${i + idx}`;
+          return {
+            user_id: user.id,
+            account_id: null,
+            external_id: externalId,
+            amount: r.amount,
+            currency: 'INR',
+            merchant: r.merchant,
+            description: r.description,
+            category_name: r.category,
+            payment_method: source === 'pdf' ? 'UPI' : 'Bank',
+            date: r.date,
+            is_debit: r.isDebit,
+            notes: null as string | null,
+          };
+        });
         const { error, data } = await supabase
           .from('transactions')
           .upsert(chunk, { onConflict: 'user_id,external_id', ignoreDuplicates: true })
@@ -205,10 +217,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         else skipped += chunk.length;
       }
       if (imported > 0) {
+        const sourceLabel = source === 'pdf' ? 'PDF statement' : source === 'gpay' ? 'Google Pay' : 'bank statement';
         await supabase.from('notifications').insert({
           user_id: user.id,
-          title: 'CSV Import Complete',
-          body: `${imported} transactions imported from your bank statement.`,
+          title: 'Import Complete',
+          body: `${imported} transactions imported from your ${sourceLabel}.`,
           type: 'success',
         });
       }
@@ -233,7 +246,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     <AppContext.Provider value={{
       transactions, budgets, notifications, accounts, syncing, importing, unreadCount,
       loadAll, syncTransactions, markAllRead, upsertBudget, updateTransactionCategory,
-      importCsvTransactions, pickCsvAndPreview, pickTakeoutAndPreview,
+      importCsvTransactions, pickCsvAndPreview, pickTakeoutAndPreview, pickPdfAndPreview,
     }}>
       {children}
     </AppContext.Provider>

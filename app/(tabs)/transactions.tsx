@@ -17,48 +17,51 @@ type ImportStep = 'idle' | 'picking' | 'preview' | 'importing' | 'done';
 type DateRange = '7d' | '30d' | '90d' | 'all';
 
 export default function TransactionsScreen() {
-  const { transactions, updateTransactionCategory, pickCsvAndPreview, pickTakeoutAndPreview, importCsvTransactions, importing } = useApp();
+  const { transactions, updateTransactionCategory, pickCsvAndPreview, pickTakeoutAndPreview, pickPdfAndPreview, importCsvTransactions, importing } = useApp();
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<DateRange>('all');
   const [selectedTxn, setSelectedTxn] = useState<Transaction | null>(null);
   const [catPickerVisible, setCatPickerVisible] = useState(false);
 
-  // CSV import state
+  // Import state
   const [importStep, setImportStep] = useState<ImportStep>('idle');
   const [csvPreview, setCsvPreview] = useState<{ rows: ParsedRow[]; errors: string[]; fileName: string } | null>(null);
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number } | null>(null);
+  const [importSource, setImportSource] = useState<'csv' | 'gpay' | 'pdf'>('csv');
 
   async function handlePickCsv() {
-    setImportStep('picking');
+    setImportStep('picking'); setImportSource('csv');
     try {
       const result = await pickCsvAndPreview();
       if (!result) { setImportStep('idle'); return; }
-      setCsvPreview(result);
-      setImportStep('preview');
-    } catch (e) {
-      Alert.alert('Error', 'Could not read the file. Please try again.');
-      setImportStep('idle');
-    }
+      setCsvPreview(result); setImportStep('preview');
+    } catch { Alert.alert('Error', 'Could not read the file.'); setImportStep('idle'); }
   }
 
   async function handlePickTakeout() {
-    setImportStep('picking');
+    setImportStep('picking'); setImportSource('gpay');
     try {
       const result = await pickTakeoutAndPreview();
       if (!result) { setImportStep('idle'); return; }
-      setCsvPreview(result);
+      setCsvPreview(result); setImportStep('preview');
+    } catch { Alert.alert('Error', 'Could not read the file.'); setImportStep('idle'); }
+  }
+
+  async function handlePickPdf() {
+    setImportStep('picking'); setImportSource('pdf');
+    try {
+      const result = await pickPdfAndPreview();
+      if (!result) { setImportStep('idle'); return; }
+      setCsvPreview({ rows: result.rows, errors: result.errors, fileName: result.fileName });
       setImportStep('preview');
-    } catch (e) {
-      Alert.alert('Error', 'Could not read the file. Please try again.');
-      setImportStep('idle');
-    }
+    } catch { Alert.alert('Error', 'Could not read the PDF.'); setImportStep('idle'); }
   }
 
   async function handleConfirmImport() {
     if (!csvPreview) return;
     setImportStep('importing');
-    const result = await importCsvTransactions(csvPreview.rows);
+    const result = await importCsvTransactions(csvPreview.rows, importSource);
     setImportResult(result);
     setImportStep('done');
   }
@@ -112,6 +115,10 @@ export default function TransactionsScreen() {
           <TouchableOpacity style={[styles.importBtn, { backgroundColor: COLORS.secondary }]} onPress={handlePickCsv} disabled={importStep !== 'idle'}>
             <Upload color="#fff" size={14} />
             <Text style={styles.importBtnText}>CSV</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.importBtn, { backgroundColor: '#7C3AED' }]} onPress={handlePickPdf} disabled={importStep !== 'idle'}>
+            <Upload color="#fff" size={14} />
+            <Text style={styles.importBtnText}>PDF</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -263,7 +270,9 @@ export default function TransactionsScreen() {
 
           {importStep === 'preview' && csvPreview && (
             <>
-              <Text style={styles.sheetTitle}>Import Bank Statement</Text>
+              <Text style={styles.sheetTitle}>
+                {importSource === 'pdf' ? 'Import PDF Statement' : importSource === 'gpay' ? 'Import Google Pay' : 'Import Bank Statement'}
+              </Text>
               <Text style={styles.importFileName}>{csvPreview.fileName}</Text>
 
               {csvPreview.errors.length > 0 && (
