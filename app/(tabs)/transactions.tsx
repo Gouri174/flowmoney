@@ -26,7 +26,7 @@ export default function TransactionsScreen() {
 
   // Import state
   const [importStep, setImportStep] = useState<ImportStep>('idle');
-  const [csvPreview, setCsvPreview] = useState<{ rows: ParsedRow[]; errors: string[]; fileName: string } | null>(null);
+  const [csvPreview, setCsvPreview] = useState<{ rows: ParsedRow[]; errors: string[]; fileName: string; bankName?: string } | null>(null);
   const [importResult, setImportResult] = useState<{ imported: number; skipped: number } | null>(null);
   const [importSource, setImportSource] = useState<'csv' | 'gpay' | 'pdf'>('csv');
 
@@ -53,7 +53,7 @@ export default function TransactionsScreen() {
     try {
       const result = await pickPdfAndPreview();
       if (!result) { setImportStep('idle'); return; }
-      setCsvPreview({ rows: result.rows, errors: result.errors, fileName: result.fileName });
+      setCsvPreview({ rows: result.rows, errors: result.errors, fileName: result.fileName, bankName: result.bankName });
       setImportStep('preview');
     } catch { Alert.alert('Error', 'Could not read the PDF.'); setImportStep('idle'); }
   }
@@ -273,7 +273,9 @@ export default function TransactionsScreen() {
               <Text style={styles.sheetTitle}>
                 {importSource === 'pdf' ? 'Import PDF Statement' : importSource === 'gpay' ? 'Import Google Pay' : 'Import Bank Statement'}
               </Text>
-              <Text style={styles.importFileName}>{csvPreview.fileName}</Text>
+              <Text style={styles.importFileName}>
+                {csvPreview.fileName}{csvPreview.bankName ? ` · ${csvPreview.bankName}` : ''}
+              </Text>
 
               {csvPreview.errors.length > 0 && (
                 <View style={styles.importErrorBox}>
