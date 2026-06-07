@@ -413,6 +413,35 @@ function detectBankName(text: string): string {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// CDN LOADER — loads pdfjs v3 UMD build as a <script> tag.
+// This completely avoids Metro bundler trying to bundle pdfjs-dist
+// (which fails due to dynamic require() calls with computed IDs).
+// ─────────────────────────────────────────────────────────────────────────────
+const PDFJS_CDN = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+function loadPdfjsFromCdn(): Promise<any> {
+  // Return cached instance if already loaded
+  if (typeof window !== 'undefined' && (window as any).__flowPdfjs) {
+    return Promise.resolve((window as any).__flowPdfjs);
+  }
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = PDFJS_CDN;
+    script.async = true;
+    script.onload = () => {
+      const lib = (window as any).pdfjsLib;
+      if (!lib) { reject(new Error('pdfjsLib not found after script load')); return; }
+      lib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+      (window as any).__flowPdfjs = lib;
+      resolve(lib);
+    };
+    script.onerror = () => reject(new Error('Failed to load PDF.js from CDN. Check your internet connection.'));
+    document.head.appendChild(script);
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MAIN ENTRY POINT
 // ─────────────────────────────────────────────────────────────────────────────
 export async function parsePdfFile(uri: string, fileName = 'statement.pdf'): Promise<PdfImportResult> {
@@ -424,14 +453,14 @@ export async function parsePdfFile(uri: string, fileName = 'statement.pdf'): Pro
   }
 
   try {
-    const pdfjsLib = await import('pdfjs-dist');
-    (pdfjsLib as any).GlobalWorkerOptions.workerSrc =
-      `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${(pdfjsLib as any).version}/pdf.worker.min.mjs`;
+    // Load pdfjs from CDN via <script> tag — avoids Metro bundler dynamic-require errors.
+    // Uses pdfjs v3 UMD build (exposes window.pdfjsLib).
+    const pdfjsLib = await loadPdfjsFromCdn();
 
     const response = await fetch(uri);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const buffer = await response.arrayBuffer();
-    const pdf = await (pdfjsLib as any).getDocument({ data: buffer }).promise;
+    const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buffer) }).promise;
 
     const allItems: Array<{ str: string; x: number; y: number }> = [];
     let fullText = '';
@@ -442,8 +471,8 @@ export async function parsePdfFile(uri: string, fileName = 'statement.pdf'): Pro
       const viewport = page.getViewport({ scale: 1 });
       const content = await page.getTextContent();
 
-      for (const item of content.items) {
-        if (!('str' in item) || !item.str.trim()) continue;
+      for (const item of content.items as any[]) {
+        if (!item.str?.trim()) continue;
         const x = item.transform[4];
         const y = viewport.height - item.transform[5] + pageOffset;
         allItems.push({ str: item.str, x, y });
